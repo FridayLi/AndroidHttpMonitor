@@ -2,11 +2,13 @@ package com.liquandong.anpm;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.provider.Settings;
 import android.support.design.widget.FloatingActionButton;
 import android.support.v7.app.AlertDialog;
 import android.util.Log;
@@ -19,15 +21,24 @@ import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.Toolbar;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.widget.CompoundButton;
+import android.widget.Switch;
+import android.widget.Toast;
 
 import com.liquandong.anpm.proxy.ProxyService;
+import com.liquandong.anpm.utils.NetworkUtils;
+import com.liquandong.anpm.utils.ProxyUtils;
+
+import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity
         implements NavigationView.OnNavigationItemSelectedListener {
 
     private static final String TAG = "MainActivity";
 
-    private boolean mBound;
+    private boolean mIsProxyServerConnected;
+
+    private boolean mIsProxyConfigured;
 
     private int mPort;
 
@@ -42,7 +53,7 @@ public class MainActivity extends AppCompatActivity
         fab.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                openProxy();
+                startProxyServer();
             }
         });
 
@@ -54,6 +65,23 @@ public class MainActivity extends AppCompatActivity
 
         NavigationView navigationView = (NavigationView) findViewById(R.id.nav_view);
         navigationView.setNavigationItemSelectedListener(this);
+        Switch monitorSwitch = navigationView.getHeaderView(0).findViewById(R.id.sh_monitor);
+        monitorSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (isChecked) {
+                    startProxyServer();
+                } else {
+                    stopProxyServer();
+                }
+            }
+        });
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        mIsProxyConfigured = ProxyUtils.isProxyConfigured("127.0.0.1", mPort);
     }
 
     @Override
@@ -81,10 +109,6 @@ public class MainActivity extends AppCompatActivity
         int id = item.getItemId();
 
         //noinspection SimplifiableIfStatement
-        if (id == R.id.action_settings) {
-            return true;
-        }
-
         return super.onOptionsItemSelected(item);
     }
 
@@ -116,7 +140,7 @@ public class MainActivity extends AppCompatActivity
     private ServiceConnection mProxyConnection = new ServiceConnection() {
         @Override
         public void onServiceDisconnected(ComponentName component) {
-            mBound = false;
+            mIsProxyServerConnected = false;
         }
 
         @Override
@@ -127,11 +151,17 @@ public class MainActivity extends AppCompatActivity
                     callbackService.getProxyPort(new IProxyPortListener.Stub() {
                         @Override
                         public void setProxyPort(final int port) throws RemoteException {
+                            Log.d(TAG, "setProxyPort = " + port);
                             mPort = port;
                             runOnUiThread(new Runnable() {
                                 @Override
                                 public void run() {
-                                    showProxySettingDialog();
+                                    mIsProxyConfigured = ProxyUtils.isProxyConfigured("127.0.0.1", mPort);
+                                    if (!mIsProxyConfigured) {
+                                        showProxySettingDialog();
+                                    } else {
+                                        Toast.makeText(MainActivity.this, "抓包功能已开启", Toast.LENGTH_LONG).show();
+                                    }
                                 }
                             });
                         }
@@ -140,19 +170,84 @@ public class MainActivity extends AppCompatActivity
                     e.printStackTrace();
                 }
             }
-            mBound = true;
+            mIsProxyServerConnected = true;
             Log.d(TAG, "proxy service start");
         }
     };
 
-    private void openProxy() {
-        Intent intent = new Intent(this, ProxyService.class);
-        bindService(intent, mProxyConnection, Context.BIND_AUTO_CREATE);
+    private void startProxyServer() {
+        if (!NetworkUtils.NETWORK_CLASS_WIFI.equals(NetworkUtils.getNetworkType(this))) {
+            showWifiSettingDialog();
+            return;
+        }
+        if (mIsProxyServerConnected) {
+            mIsProxyConfigured = ProxyUtils.isProxyConfigured("127.0.0.1", mPort);
+            if (!mIsProxyConfigured) {
+                showProxySettingDialog();
+            } else {
+                Toast.makeText(this, "抓包功能已开启", Toast.LENGTH_LONG).show();
+            }
+        } else {
+            Intent intent = new Intent(this, ProxyService.class);
+            bindService(intent, mProxyConnection, Context.BIND_AUTO_CREATE);
+        }
+    }
+
+    private void stopProxyServer() {
+        if (mIsProxyServerConnected) {
+            unbindService(mProxyConnection);
+            mIsProxyServerConnected = false;
+            Toast.makeText(this, "抓包功能已关闭", Toast.LENGTH_LONG).show();
+        } else {
+            Toast.makeText(this, "抓包功能已关闭", Toast.LENGTH_LONG).show();
+        }
+    }
+
+
+    private void showWifiSettingDialog() {
+        AlertDialog.Builder dialogBuilder = new AlertDialog.Builder(this);
+        AlertDialog dialog = dialogBuilder.setTitle("提示")
+                .setMessage("需要开启wifi网络才能进行网络抓包哦")
+                .setNegativeButton("算了", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        dialog.dismiss();
+                    }
+                })
+                .setPositiveButton("去开启", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        dialog.dismiss();
+                        Intent intent = new Intent(Settings.ACTION_WIFI_SETTINGS);
+                        startActivity(intent);
+                    }
+                })
+                .create();
+        dialog.show();
     }
 
     private void showProxySettingDialog() {
+        String msg = String.format(Locale.getDefault(),
+                "需要设置wifi代理才能进行网络抓包哦\r\nhost: 127.0.0.1\r\nport: %d", mPort);
         AlertDialog.Builder dialogBuilder = new AlertDialog.Builder(this);
-
+        AlertDialog dialog = dialogBuilder.setTitle("提示")
+                .setMessage(msg)
+                .setNegativeButton("算了", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        dialog.dismiss();
+                    }
+                })
+                .setPositiveButton("去设置", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        dialog.dismiss();
+                        Intent intent = new Intent(Settings.ACTION_WIFI_SETTINGS);
+                        startActivity(intent);
+                    }
+                })
+                .create();
+        dialog.show();
     }
 
 }
