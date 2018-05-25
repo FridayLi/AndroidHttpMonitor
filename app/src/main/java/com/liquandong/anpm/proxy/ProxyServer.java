@@ -15,12 +15,25 @@
  */
 package com.liquandong.anpm.proxy;
 
+import android.content.Context;
 import android.os.RemoteException;
 import android.util.Log;
 
 import com.liquandong.anpm.IProxyPortListener;
 import com.liquandong.anpm.utils.ProxyUtils;
 
+import org.littleshoot.proxy.HttpFilters;
+import org.littleshoot.proxy.HttpFiltersAdapter;
+import org.littleshoot.proxy.HttpFiltersSource;
+import org.littleshoot.proxy.HttpFiltersSourceAdapter;
+import org.littleshoot.proxy.HttpProxyServer;
+import org.littleshoot.proxy.HttpProxyServerBootstrap;
+import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
+import org.littleshoot.proxy.mitm.Authority;
+import org.littleshoot.proxy.mitm.CertificateSniffingMitmManager;
+import org.littleshoot.proxy.mitm.RootCertificateException;
+
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -37,6 +50,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.http.HttpObject;
+import io.netty.handler.codec.http.HttpRequest;
+import io.netty.handler.codec.http.HttpResponse;
 
 /**
  * @hide
@@ -59,6 +77,7 @@ public class ProxyServer extends Thread {
     private ServerSocket serverSocket;
     private int mPort;
     private IProxyPortListener mCallback;
+    private Context mContext;
 
     private class ProxyConnection implements Runnable {
         private Socket connection;
@@ -334,14 +353,19 @@ public class ProxyServer extends Thread {
         }
     }
 
-    public ProxyServer() {
+    public ProxyServer(Context context) {
         threadExecutor = Executors.newCachedThreadPool();
         mPort = -1;
         mCallback = null;
+        mContext = context;
     }
 
     @Override
     public void run() {
+        startProxy2();
+    }
+
+    private void startProxy() {
         try {
             int port = ProxyUtils.findValidPort();
             serverSocket = new ServerSocket(port);
@@ -413,5 +437,36 @@ public class ProxyServer extends Thread {
 
     public int getPort() {
         return mPort;
+    }
+
+    private void startProxy2() {
+        try {
+            int port = ProxyUtils.findValidPort();
+            HttpProxyServerBootstrap bootstrap = DefaultHttpProxyServer.bootstrap();
+            bootstrap.withPort(port);
+            bootstrap.withFiltersSource(new HttpFiltersSourceAdapter() {
+                public HttpFilters filterRequest(HttpRequest originalRequest, ChannelHandlerContext ctx) {
+                    return new HttpFiltersAdapter(originalRequest) {
+                        @Override
+                        public HttpResponse clientToProxyRequest(HttpObject httpObject) {
+                            Log.d("liqd", "clientToProxyRequest, this = " + this + ", httpObject = " + httpObject);
+                            return null;
+                        }
+
+                        @Override
+                        public HttpObject serverToProxyResponse(HttpObject httpObject) {
+                            Log.d("liqd", "serverToProxyResponse, this = " + this + ", httpObject = " + httpObject);
+                            return httpObject;
+                        }
+                    };
+                }
+            });
+            bootstrap.withManInTheMiddle(CertificateManager.getInstance().getMitmManager(mContext));
+
+            bootstrap.start();
+            setPort(port);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }

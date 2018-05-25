@@ -39,7 +39,7 @@ public class ProxyService extends Service {
         super.onCreate();
         Log.d("test", "ProxyService onCreate");
         if (server == null) {
-            server = new ProxyServer();
+            server = new ProxyServer(getApplicationContext());
             server.startServer();
         }
     }
